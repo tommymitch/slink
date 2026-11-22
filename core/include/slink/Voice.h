@@ -6,6 +6,14 @@
 namespace slink
 {
 
+/** How a note-on excites the mesh. */
+enum class Excitation
+{
+    noise,    // random kick to every scan-path lump (the reference model's default)
+    sine,     // spatial harmonic over the whole mesh: smooth, pitched start
+    strike    // raised-cosine bump at a point (strikeX, strikeY)
+};
+
 /** One playable instance of a mesh: physics state, scan reader, oscillator and
     output filter. This is what a plugin's processBlock (or the benchmark) runs.
 
@@ -20,6 +28,11 @@ public:
 
     void setParams (const Params& params);
     const Params& getParams() const noexcept { return params; }
+    const StepParams& getStepParams() const noexcept { return stepParams; }
+
+    /** Changes the physics rate without resetting the mesh. Real-time safe. */
+    void setPhysicsRate (double physicsRateHz) noexcept;
+    double getPhysicsRate() const noexcept { return physicsRate; }
 
     /** Puts the mesh back at rest. */
     void reset() noexcept;
@@ -27,11 +40,26 @@ public:
     /** Sets the pitch and hits the scan path. velocity is 0..1. */
     void noteOn (int noteNumber, float velocity) noexcept;
 
+    /** Changes the scan pitch without hitting the mesh (e.g. legato fall-back). */
+    void setPitch (int noteNumber) noexcept;
+
+    /** Unpins the mesh's pinned edges (true), or pins them again at their rest
+        positions (false; the jump back excites the mesh). Kept across reset(). */
+    void setFreeEdges (bool shouldBeFree) noexcept;
+    bool getFreeEdges() const noexcept { return freeEdges; }
+
+    void setScanMode (ScanMode m) noexcept { scan.setMode (m); }
+
     /** Renders mono audio. */
     void render (float* output, int numSamples) noexcept;
 
     float velocitySensitivity = 0.5f;   // as the reference model's "Velocity" default
     float volume = 1.0f;
+
+    Excitation excitation = Excitation::noise;
+    int   harmonicX = 1, harmonicY = 0;      // sine: displacement in y follows sin((2hx-1) pi x); hy = 0 means none in x
+    float strikeX = 0.5f, strikeY = 0.7f;    // strike: centre, in mesh coordinates
+    float strikeRadius = 0.1f;
 
     const Topology& getTopology() const noexcept { return topology; }
     const State& getState() const noexcept { return state; }
@@ -57,6 +85,9 @@ private:
     ScanReader scan;
     HighPass highPass;
     Random random;
+
+    bool freeEdges = false;
+    void applyFreeEdges() noexcept;
 
     Params params;
     StepParams stepParams {};

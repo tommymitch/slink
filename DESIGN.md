@@ -13,6 +13,8 @@ This file records the design decisions; `ToDo.md` tracks the work.
 | Polyphony | Not yet. Keep `State` separate from `Topology` so voices can share one mesh later. |
 | Mesh shapes | Spider-cross 50×15 first (the reference model's default). Other and new shapes later. |
 | Rest shape | Meshes are settled to force balance at build time (`settleRestShape()`) and measured from that shape, so they sit perfectly still until excited. Smoothing acts on displacement from rest. `RestShape::built` reproduces the reference model, which starts out of balance. |
+| Stability guard | The spring constant is clamped to an empirical limit `m * c / dt^2`, which depends on smoothing, time mode and physics rate (`maxStableSpringConstant()`). The time-scaled limit shrinks at high rates because damping and smoothing per step shrink. The user-facing value is kept; the editor shows when the guard is limiting it. |
+| Homing | A critically damped spring to home (force, in the integrate loop), not the reference model's position blend, which left a non-decaying velocity. The loop is compiled with and without it, so it is free when off. Smoothing is still a position blend (see ToDo stage 1c). |
 | Future | A 3D sphere, scanned over its surface while it spins (see ToDo backlog). Keep the core's vector maths easy to extend from 2D to 3D. |
 
 ## Structure

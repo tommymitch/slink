@@ -2,9 +2,39 @@
 
 #include <algorithm>
 #include <cmath>
+#include <type_traits>
 
 namespace slink
 {
+
+namespace
+{
+    double stepDt (const Params& p, double physicsRateHz)
+    {
+        if (p.integrator == Integrator::legacy)
+            return 0.5;
+        return 0.5 * referencePhysicsRateHz / std::max (physicsRateHz, 1.0);
+    }
+}
+
+float maxStableSpringConstant (const Params& p, double physicsRateHz) noexcept
+{
+    // Empirical limit on (k / m) * dt^2, measured by bisection on the 50x15
+    // spider-cross with repeated maximum-velocity hits (see ToDo.md, stage 1b):
+    //   legacy: ~0.3 with strong damping, lower with light damping; less
+    //   smoothing lowers it (energy creeps up with no smoothing above ~0.1).
+    //   time-scaled: falls as the rate rises (0.32 at 60 Hz, 0.16 at 1 kHz,
+    //   0.044 at 48 kHz), because per-step damping and smoothing shrink.
+    // These constants were validated over 720 cases (both modes, 30 Hz to
+    // 48 kHz, k up to 1e7, m 0.1-10, smoothing 0-0.1, light and heavy damping).
+    const double smoothingFactor = std::clamp ((double) p.smoothing / 0.01, 0.0, 1.0);
+    double c = 0.1 + 0.1 * smoothingFactor;    // 0.2 at smoothing >= 0.01: exactly the k = 0.8 default
+    if (p.integrator == Integrator::timeScaled)
+        c *= std::min (1.0, std::pow (referencePhysicsRateHz / std::max (physicsRateHz, 1.0), 0.4));
+
+    const double dt = stepDt (p, physicsRateHz);
+    return (float) (std::max ((double) p.mass, 1.0e-6) * c / (dt * dt));
+}
 
 StepParams resolve (const Params& p, double physicsRateHz)
 {
@@ -12,18 +42,25 @@ StepParams resolve (const Params& p, double physicsRateHz)
     const double invMass = 1.0 / std::max ((double) p.mass, 1.0e-6);
 
     StepParams s {};
-    s.accelScale = (float) ((double) p.springConstant * invMass);
+    s.springConstant = p.stabilityGuard ? std::min (p.springConstant, maxStableSpringConstant (p, physicsRateHz))
+                                        : p.springConstant;
+    s.accelScale = (float) ((double) s.springConstant * invMass);
     s.gravAccelX = (float) ((double) p.gravityX * invMass);
     s.gravAccelY = (float) ((double) p.gravityY * invMass);
     s.wallBounce = p.wallBounce;
+    s.minCompression = p.minCompression;
     s.springsOn  = p.springsOn;
+
+    // Homing is a force, so it is the same in both time modes and at every rate.
+    // K <= 0.5 and C <= 1.42 stay well inside the stable range at dt = 0.5.
+    s.homingK = 0.5f * std::clamp (p.homing, 0.0f, 1.0f);
+    s.homingC = 2.0f * std::sqrt (s.homingK);
 
     if (p.integrator == Integrator::legacy)
     {
         s.damp      = (float) legacyDamp;
         s.accelDt   = 0.5f;
         s.velDt     = 0.5f;
-        s.homing    = p.homing;
         s.smoothing = p.smoothing;
     }
     else
@@ -33,7 +70,6 @@ StepParams resolve (const Params& p, double physicsRateHz)
         s.damp      = (float) std::pow (legacyDamp, r);
         s.accelDt   = (float) (0.5 * r);
         s.velDt     = (float) (0.5 * r);
-        s.homing    = (float) (1.0 - std::pow (1.0 - (double) p.homing, r));
         s.smoothing = (float) (1.0 - std::pow (1.0 - (double) p.smoothing, r));
     }
 
@@ -74,6 +110,7 @@ void step (const Topology& t, State& s, const StepParams& p) noexcept
         const auto* nlB = t.nlB.data();
         const auto* rest = t.nlRest.data();
         const auto numNl = t.nlA.size();
+        const float minComp = p.minCompression;
 
         for (std::size_t i = 0; i < numNl; ++i)
         {
@@ -81,8 +118,10 @@ void step (const Topology& t, State& s, const StepParams& p) noexcept
             const float dx = x[b] - x[a];
             const float dy = y[b] - y[a];
             const float len = std::sqrt (dx * dx + dy * dy);
-            // ff = rest / len - 1 is the (negated) force factor on b; guard len -> 0.
-            const float ff = rest[i] / std::max (len, 1.0e-12f) - 1.0f;
+            // ff = rest / len - 1 is the (negated) force factor on b. Optionally
+            // capped below minCompression * rest (stiffness grows without bound as
+            // a spring collapses).
+            const float ff = rest[i] / std::max (len, minComp * rest[i] + 1.0e-12f) - 1.0f;
             fx[b] += ff * dx;  fy[b] += ff * dy;
             fx[a] -= ff * dx;  fy[a] -= ff * dy;
         }
@@ -95,11 +134,29 @@ void step (const Topology& t, State& s, const StepParams& p) noexcept
         const auto* maskY = s.accelMaskY.data();
         const float k = p.accelScale, gx = p.gravAccelX, gy = p.gravAccelY;
         const float damp = p.damp, aDt = p.accelDt, vDt = p.velDt, bounce = p.wallBounce;
+        const float hK = p.homingK, hC = p.homingC;
+        const auto* hx = s.homeX.data();
+        const auto* hy = s.homeY.data();
+        const auto* freeMask = s.filterMask.data();
 
+        // Compiled twice, so homing costs nothing when it is off.
+        auto integrate = [&] (auto withHoming)
+        {
         for (std::uint32_t i = 0; i < n; ++i)
         {
-            const float ax = (fx[i] * k + gx) * maskX[i];
-            const float ay = (fy[i] * k + gy) * maskY[i];
+            // Homing: a critically damped spring to home, on free lumps only. (The
+            // reference model blended position towards home instead; where springs
+            // or gravity hold a lump away from home that leaves a constant velocity
+            // that never decays. As a force, it comes properly to rest.)
+            float ax = fx[i] * k + gx, ay = fy[i] * k + gy;
+            if constexpr (decltype (withHoming)::value)
+            {
+                const float hm = hK * freeMask[i], hd = hC * freeMask[i];
+                ax += hm * (hx[i] - x[i]) - hd * vx[i];
+                ay += hm * (hy[i] - y[i]) - hd * vy[i];
+            }
+            ax *= maskX[i];
+            ay *= maskY[i];
             const float m = moveMask[i];
 
             const float nvx = damp * vx[i] + aDt * ax;
@@ -119,26 +176,17 @@ void step (const Topology& t, State& s, const StepParams& p) noexcept
             x[i] = px;  y[i] = py;
             vx[i] = pvx; vy[i] = pvy;
         }
+        };
+
+        if (hK > 0.0f)
+            integrate (std::true_type {});
+        else
+            integrate (std::false_type {});
     }
 
     const auto* filterMask = s.filterMask.data();
 
-    // 3. Homing: pull free lumps towards home.
-    if (p.homing > 0.0f)
-    {
-        const auto* hx = s.homeX.data();
-        const auto* hy = s.homeY.data();
-        const float h = p.homing;
-
-        for (std::uint32_t i = 0; i < n; ++i)
-        {
-            const float amt = h * filterMask[i];
-            x[i] += amt * (hx[i] - x[i]);
-            y[i] += amt * (hy[i] - y[i]);
-        }
-    }
-
-    // 4. Smoothing: mix each free lump towards the average of its neighbours.
+    // 3. Smoothing: mix each free lump towards the average of its neighbours.
     //    Averages are computed for every lump first, then applied (Jacobi), as
     //    in the reference model.
     if (p.smoothing > 0.0f)

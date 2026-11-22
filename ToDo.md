@@ -30,12 +30,28 @@ Design decisions live in `DESIGN.md`.
 
 ### Stage 1b: bare-bones listening plugin
 So each later stage can be judged by ear as well as by benchmark numbers.
-- [ ] `plugin/` JUCE target: Standalone + VST3, synth, MIDI in, mono/stereo out
-- [ ] Plays SlinkCore directly on the audio thread; no mesh view (default generic editor)
-- [ ] A few APVTS parameters: physics rate, integrator, spring, mass, friction, smoothing, volume
-- [ ] Correct MIDI handling from the start (all events, note-off)
-- [ ] **Stability guard:** clamp spring/mass (and minimum smoothing) to the stable range for the current mode and physics rate. Measured with a max-velocity hit: legacy mode is stable up to k ≈ 0.8 with smoothing 0.01, but blows up at k ≥ 0.85, or at k ≥ 0.7 with smoothing 0. Time-scaled mode's limit grows with the rate squared: k ≤ ~0.8 at 60 Hz, ≤ 2 at 120 Hz, ≤ 100 at 1 kHz, ≥ 1000 at 48 kHz; 30 Hz is unstable even at the default.
-- [ ] Build instructions in README
+- [x] `plugin/` JUCE target: Standalone + VST3, synth, MIDI in, mono/stereo out
+- [x] Plays SlinkCore directly on the audio thread; generic editor + status line + on-screen keyboard
+- [x] APVTS parameters: physics rate (60 Hz to 16 kHz, or audio rate), time mode, spring, mass, damping (= 1 - friction), smoothing, velocity sensitivity, output gain (default +12 dB; a typical note peaks around -22 dBFS raw)
+- [x] Correct MIDI handling: sample-accurate, all events, last-note priority (note-off falls back to the previous held pitch without a new hit; otherwise the mesh rings on), All Sound Off / Reset All Controllers reset the mesh
+- [x] **Stability guard:** `maxStableSpringConstant()` clamps k to `m * c / dt^2`; the editor shows when it is limiting. Measured limits by bisection (repeated max-velocity hits, m = 1) on `(k/m)*dt^2`: legacy about 0.3 with heavy damping and lower with light damping; time-scaled falls as the rate rises (0.32 at 60 Hz, 0.16 at 1 kHz, 0.044 at 48 kHz). With no smoothing, lightly damped meshes slowly gain energy above about 0.1. So c = 0.1 to 0.2 (by smoothing 0 to 0.01), times `min(1, (60/rate)^0.4)` in time-scaled mode. Validated on 720 cases: both modes, 30 Hz to 48 kHz, k up to 1e7, m 0.1 to 10, smoothing 0 to 0.1, light and heavy damping. Guard tests are in `slink_core_tests`. The default k = 0.8 sits exactly at the legacy limit.
+- [x] Spring compression cap (`Params::minCompression`) kept as an option, off by default. It didn't help stability and it changes the sound.
+- [x] Build instructions in README
+- [x] Basic mesh view (pulled forward): lock-free triple-buffer position snapshot published once per block, drawn per display refresh with plain JUCE graphics. Scan ring highlighted; display-only exaggeration control (default 4x)
+- [ ] Listen: compare against the reference model by ear, then retire `refmodel/`
+
+### Stage 1c: expose reference-model features
+- [x] Homing ("still"), now a continuous control. **Changed:** homing is a critically damped spring to home (a force) rather than the reference model's position blend. The blend left a constant velocity that never decayed wherever springs or gravity held a lump away from home: it was heard in speed scan mode and kicked the mesh when homing was switched off. It is now also identical in both time modes at every rate.
+- [x] Drift (springs off)
+- [x] Gravity (downwards, amount). The reference model's gravity button did nothing: the line that set the gravity vector was commented out.
+- [x] Free edges: unpins the rim and hub; re-pinning puts them back at rest (the jump back excites the mesh). Kept across reset.
+- [x] Reset mesh button (editor -> audio thread through an atomic flag)
+- [x] Excitation: noise (scan ring, as before), sine (whole-mesh spatial harmonic with x/y harmonic numbers; additive, where the reference model set positions absolutely) or strike (raised-cosine bump at a point). Level-matched to noise (sine x0.8, strike x2).
+- [x] Scan mode: displacement, speed, spring stretch, y position. Level-matched to displacement with noise hits (x0.25, x0.42, x0.47). Sine excitation read as spring stretch stays ~25 dB quieter: a smooth shape barely stretches the ring.
+- [x] Stability: 960-case sweep (both modes, 60 Hz/1 kHz/48 kHz, k 0.8 and max, smoothing 0/0.01, gravity, homing, free/pinned, all excitations). All pinned cases decay under heavy damping. Free-edge cases are bounded (energy ratio <= 1.23, nothing diverges) but don't fully decay, see next item.
+- [ ] **Smoothing is still a position blend**, the same flaw homing had. When a mesh is held away from its rest shape (freed edges collapsing it into a knot, or gravity sag), smoothing fights the springs and leaves a small constant velocity: ~3e-5 with gravity (about -100 dB in speed mode, inaudible), larger in a collapsed free mesh. Fix: make smoothing a force (a Laplacian damper), which changes the parity sound, so decide by ear.
+- [ ] Free edges collapse the spider-cross: its spokes and diagonals are zero-rest-length springs, so without the rim pinned they pull everything to the centre. Consider rest-length spokes for free-edge meshes, or treat this as part of the new-shapes work.
+- [ ] Not exposed: speed (just 1/sqrt(mass)), syrup (a friction preset), asymmetry (needs per-lump/per-spring arrays and a worst-case guard), touch modes and custom scan paths (need the GUI -> audio command FIFO, stage 3/4).
 
 ### Stage 2: optimise
 - [ ] Run the benchmark loop at real-time / audio-thread priority (macOS QoS), so OS scheduling outliers don't mask real worst-case changes (one 48 kHz run showed a single 155% block with a normal 49% p99)
@@ -50,12 +66,12 @@ So each later stage can be judged by ear as well as by benchmark numbers.
 - [ ] Parameters through APVTS, applied in `processBlock` (work with the editor closed)
 - [ ] Parameters: physics rate, integrator, speed, spring, mass, friction, smoothing, homing ("still"), drift, gravity, velocity sensitivity
 - [ ] Correct MIDI handling: iterate all events, handle note-off
-- [ ] GUI → audio command FIFO, audio → GUI position snapshot (lock-free)
+- [ ] GUI → audio command FIFO (the audio → GUI position snapshot is done: `plugin/Source/MeshSnapshot.h`)
 - [ ] Benchmark the real `processBlock` (via the plugin's processor in `slink_bench`)
-- [ ] Validate with pluginval
+- [ ] Validate with pluginval (not installed yet)
 
 ### Stage 4: editor and interaction
-- [ ] Mesh view drawn from the snapshot
+- [ ] Mesh view drawn from the snapshot (basic version done in 1b; still needed: touch interaction, and the GPU renderer in the backlog)
 - [ ] Touch modes: grab/drag, force field, spatial harmonic, stick/unstick, reset
 - [ ] Toggles: free edges, gravity, drift, animate
 
@@ -97,3 +113,5 @@ The **max** column matters most, because one late block is an audible dropout. I
 | 1 | slink-core | 1 kHz | 64 | 0.92% | 1.7% | 2.8% | |
 | 1 | slink-core | 4 kHz | 64 | 3.6% | 5.0% | 10.2% | |
 | 1 | slink-core | 48 kHz (audio rate) | 64 | **42.4%** | 47.6% | 53.6% | **Real-time.** ~8.8 µs per step (4.2× faster). Just over the 50% max goal; stage 2. Time-scaled mode costs the same |
+| 1b | slink-core | 48 kHz (audio rate) | 64 | 42.3% | 48.5% | 60.0% | Guard + optional compression cap: no change in cost (max is OS jitter; time-scaled 53.6%) |
+| 1c | slink-core | 48 kHz (audio rate) | 64 | 42.4% | 48.6% | 70.1% | Homing force in the integrate loop: +2% until specialised (loop compiled with/without homing); now back to stage 1 cost. Max is a single OS outlier (time-scaled 57.4%) |

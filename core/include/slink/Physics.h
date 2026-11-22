@@ -36,38 +36,54 @@ struct Params
     float springConstant = 0.8f;      // k
     float mass           = 1.0f;
     float friction       = 0.99991f;  // per-step velocity retention, as in the reference model (at 60 Hz)
-    float homing         = 0.0f;      // 0..1 pull towards home per step ("still")
+    float homing         = 0.0f;      // 0..1: critically damped pull towards home ("still"); 1 stops the mesh in a few reference steps
     float smoothing      = 0.01f;     // 0..1 averaging-filter amount per step
     float wallBounce     = 0.5f;      // velocity kept when bouncing off the [0, 1] walls
     float gravityX       = 0.0f;
     float gravityY       = 0.0f;
     bool  springsOn      = true;      // false = "drift" (springs exert no force)
     Integrator integrator = Integrator::legacy;
+    bool  stabilityGuard = true;      // clamp k to maxStableSpringConstant() (off only for experiments)
+    float minCompression = 0.0f;      // >0: springs stop stiffening when crushed below this fraction of rest length (0 = off)
 };
 
 /** Params resolved for a particular physics rate: the per-step coefficients
     that step() actually uses. */
 struct StepParams
 {
+    float springConstant;  // k actually used, after the stability guard
     float accelScale;    // k / m: spring sums are accumulated without k
     float gravAccelX, gravAccelY;
     float damp;          // velocity multiplier per step
     float accelDt;       // a -> v
     float velDt;         // v -> x
-    float homing;
+    float homingK;       // homing spring (acceleration per unit displacement)
+    float homingC;       // homing damping (critical: 2 sqrt(homingK))
     float smoothing;
     float wallBounce;
+    float minCompression;
     bool  springsOn;
 };
 
 /** The physics rate at which `timeScaled` matches `legacy` exactly. */
 inline constexpr double referencePhysicsRateHz = 60.0;
 
+/** The largest spring constant that stays stable for these params at this
+    physics rate (measured on the 50x15 spider-cross with maximum-velocity hits).
+
+    Symplectic Euler is stable while the mesh's fastest vibration is slow
+    compared with the time step, so the limit scales with mass / dt^2. At the
+    reference step (dt = 0.5) it is k/m = 0.8 with smoothing >= 0.01, falling
+    to 0.5 with no smoothing (smoothing damps the fastest modes). */
+float maxStableSpringConstant (const Params& params, double physicsRateHz) noexcept;
+
+/** Resolves params for a physics rate. The spring constant is clamped to
+    maxStableSpringConstant(), so no parameter combination can blow up. */
 StepParams resolve (const Params& params, double physicsRateHz);
 
 /** Advances the mesh by one physics step. Allocation-free.
-    Order (as in the reference model): spring forces -> integrate + walls ->
-    homing -> smoothing. */
+    Order (as in the reference model): spring forces -> integrate (with gravity
+    and homing forces) + walls -> smoothing. */
 void step (const Topology& topology, State& state, const StepParams& p) noexcept;
 
 /** Small, fast, deterministic random number generator (real-time safe). */

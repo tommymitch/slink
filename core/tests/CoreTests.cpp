@@ -160,6 +160,137 @@ void stableAtAudioRate (slink::Integrator integrator)
     CHECK (peak <= 1.0f);
 }
 
+// The stability guard: with extreme settings (k far above the limit, light mass,
+// no smoothing) and maximum-velocity hits, heavy damping must still bring the
+// mesh to rest. An unstable integrator keeps pumping energy in.
+void stabilityGuardHolds (slink::Integrator integrator, double physicsRate)
+{
+    const auto t = slink::makeSpiderCross();
+    slink::Voice v (t);
+    v.prepare (48000.0, physicsRate);
+    slink::Params p;
+    p.integrator = integrator;
+    p.springConstant = 1.0e7f;   // always clamped
+    p.mass = 0.1f;
+    p.smoothing = 0.0f;
+    p.friction = 0.95f;
+    v.setParams (p);
+    v.velocitySensitivity = 1.0f;
+
+    auto energy = [&]
+    {
+        const auto& s = v.getState();
+        double e = 0;
+        for (size_t i = 0; i < s.x.size(); ++i)
+            e += (double) s.vx[i] * s.vx[i] + (double) s.vy[i] * s.vy[i];
+        return std::isfinite (e) ? e : 1e30;
+    };
+
+    std::vector<float> out (480);
+    const int hitBlocks = std::max (25, (int) std::ceil (15.0 / physicsRate * 48000 / 480));
+    for (int h = 0; h < 8; ++h)
+    {
+        v.noteOn (48 + h, 1.0f);
+        for (int b = 0; b < hitBlocks; ++b)
+            v.render (out.data(), 480);
+    }
+    const double after = energy();
+
+    const double seconds = std::max (5.0, 3000.0 / physicsRate);   // >= 300 reference steps of damping in time-scaled mode
+    for (int b = 0; b < (int) (seconds * 100); ++b)
+        v.render (out.data(), 480);
+
+    CHECK (v.getStepParams().springConstant < p.springConstant);   // the guard clamped it
+    CHECK (energy() < std::max (0.01 * after, 1.0e-9));
+}
+
+// Homing is a damped spring to home: after a hit, the mesh returns to rest with
+// zero velocity (the reference model's position blend left a residual velocity).
+void homingComesToRest()
+{
+    slink::Voice v (slink::makeSpiderCross());
+    v.prepare (48000.0, 1000.0);
+    auto p = v.getParams();
+    p.integrator = slink::Integrator::timeScaled;
+    p.homing = 0.2f;
+    p.gravityY = -0.01f;   // a constant force homing has to hold against
+    p.smoothing = 0.0f;    // smoothing is still a position blend: it leaves ~3e-5 here (ToDo.md)
+    v.setParams (p);
+    v.noteOn (60, 1.0f);
+
+    std::vector<float> out (480);
+    for (int b = 0; b < 1000; ++b)
+        v.render (out.data(), 480);
+
+    float maxSpeed = 0.0f;
+    const auto& s = v.getState();
+    for (size_t i = 0; i < s.x.size(); ++i)
+        maxSpeed = std::max (maxSpeed, std::hypot (s.vx[i], s.vy[i]));
+    CHECK (maxSpeed < 1.0e-5f);
+}
+
+// Every excitation and scan mode makes a sound and stays finite.
+void excitationsAndScanModes()
+{
+    for (auto e : { slink::Excitation::noise, slink::Excitation::sine, slink::Excitation::strike })
+        for (auto m : { slink::ScanMode::displacement, slink::ScanMode::speed, slink::ScanMode::springForce, slink::ScanMode::yPosition })
+        {
+            slink::Voice v (slink::makeSpiderCross());
+            v.prepare (48000.0, 1000.0);
+            v.excitation = e;
+            v.harmonicX = 2;
+            v.harmonicY = 1;
+            v.setScanMode (m);
+
+            std::vector<float> out (48000);
+            v.noteOn (60, 1.0f);
+            v.render (out.data(), (int) out.size());
+
+            float peak = 0.0f;
+            for (auto x : out)
+                peak = std::max (peak, std::abs (x));
+            CHECK (allFinite (out));
+            CHECK (peak > 1.0e-4f);
+        }
+}
+
+// Freeing the edges releases the pins; re-pinning puts them back exactly at rest.
+void freeEdgesRoundTrip()
+{
+    slink::Voice v (slink::makeSpiderCross());
+    v.prepare (48000.0, 1000.0);
+    v.setFreeEdges (true);
+    v.noteOn (60, 1.0f);
+
+    std::vector<float> out (480);
+    for (int b = 0; b < 100; ++b)
+        v.render (out.data(), 480);
+
+    const auto& t = v.getTopology();
+    const auto& s = v.getState();
+    float moved = 0.0f;
+    for (std::uint32_t i = 0; i < t.numLumps; ++i)
+        if (t.defaultConstraints[i] != slink::Constraint::free)
+            moved = std::max (moved, std::hypot (s.x[i] - t.restX[i], s.y[i] - t.restY[i]));
+    CHECK (moved > 1.0e-3f);   // the edges really were free
+
+    v.setFreeEdges (false);
+    for (int b = 0; b < 100; ++b)
+        v.render (out.data(), 480);
+    for (std::uint32_t i = 0; i < t.numLumps; ++i)
+        if (t.defaultConstraints[i] == slink::Constraint::fixXY)
+        {
+            CHECK (s.x[i] == t.restX[i]);
+            CHECK (s.y[i] == t.restY[i]);
+        }
+
+    // reset() keeps the free-edges setting.
+    v.setFreeEdges (true);
+    v.reset();
+    CHECK (v.getFreeEdges());
+    CHECK (s.moveMask[0] == 1.0f);
+}
+
 void timeScaledMatchesLegacyAtReferenceRate()
 {
     auto run = [] (slink::Integrator integrator)
@@ -259,6 +390,13 @@ int main()
         { "pinned lumps stay put",                     pinnedLumpsStayPut },
         { "stable at audio rate (legacy)",             [] { stableAtAudioRate (slink::Integrator::legacy); } },
         { "stable at audio rate (time-scaled)",        [] { stableAtAudioRate (slink::Integrator::timeScaled); } },
+        { "stability guard (legacy, 60 Hz)",           [] { stabilityGuardHolds (slink::Integrator::legacy, 60.0); } },
+        { "stability guard (legacy, 48 kHz)",          [] { stabilityGuardHolds (slink::Integrator::legacy, 48000.0); } },
+        { "stability guard (time-scaled, 250 Hz)",     [] { stabilityGuardHolds (slink::Integrator::timeScaled, 250.0); } },
+        { "stability guard (time-scaled, 48 kHz)",     [] { stabilityGuardHolds (slink::Integrator::timeScaled, 48000.0); } },
+        { "homing comes to rest",                      homingComesToRest },
+        { "excitations and scan modes",                excitationsAndScanModes },
+        { "free edges round trip",                     freeEdgesRoundTrip },
         { "time-scaled == legacy at reference rate",   timeScaledMatchesLegacyAtReferenceRate },
         { "deterministic",                             deterministic },
         { "coincident lumps stay finite",              coincidentLumpsStayFinite },

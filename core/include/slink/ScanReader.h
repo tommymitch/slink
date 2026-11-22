@@ -5,6 +5,15 @@
 namespace slink
 {
 
+/** What the scan path reads from each lump (or ring spring) into the wavetable. */
+enum class ScanMode
+{
+    displacement,   // distance from home (unsigned): the reference model's default
+    speed,          // lump speed (unsigned)
+    springForce,    // stretch of the spring to the next lump on the path (unsigned)
+    yPosition       // y offset from home (signed)
+};
+
 /** Turns the shape of the scan path into a wavetable and reads it as audio.
 
     After each physics step, capture() measures every scan-path lump's
@@ -25,6 +34,9 @@ public:
 
     void reset() noexcept;
 
+    void setMode (ScanMode m) noexcept { mode = m; }
+    ScanMode getMode() const noexcept { return mode; }
+
     /** Captures the current mesh shape as the new table. Allocation-free. */
     void capture (const Topology& topology, const State& state) noexcept;
 
@@ -33,6 +45,8 @@ public:
 
 private:
     std::vector<float> oldTable, newTable;
+    std::vector<float> restLength;   // rest distance from each path lump to the next
+    ScanMode mode = ScanMode::displacement;
     float crossfade = 0.0f;
     float crossfadeIncrement = 1.0f;
 };

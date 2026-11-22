@@ -6,11 +6,28 @@
 namespace slink
 {
 
+namespace
+{
+    // Level matching against displacement mode (measured; see ToDo.md stage 1c).
+    constexpr float speedScale       = 0.25f;
+    constexpr float springForceScale = 0.42f;
+    constexpr float yPositionScale   = 0.47f;
+}
+
 void ScanReader::prepare (const Topology& topology)
 {
     const auto n = std::max<std::size_t> (topology.scanPath.size(), 1);
     oldTable.assign (n, 0.0f);
     newTable.assign (n, 0.0f);
+
+    const auto& path = topology.scanPath;
+    restLength.assign (n, 0.0f);
+    for (std::size_t i = 0; i < path.size(); ++i)
+    {
+        const auto a = path[i], b = path[(i + 1) % path.size()];
+        restLength[i] = std::hypot (topology.restX[b] - topology.restX[a], topology.restY[b] - topology.restY[a]);
+    }
+
     reset();
 }
 
@@ -26,12 +43,44 @@ void ScanReader::capture (const Topology& topology, const State& s) noexcept
     std::swap (oldTable, newTable);   // swaps pointers only: no allocation
 
     const auto& path = topology.scanPath;
-    for (std::size_t i = 0; i < path.size(); ++i)
+    const auto n = path.size();
+
+    // Per-mode scaling brings each mode to roughly the displacement mode's level.
+    switch (mode)
     {
-        const auto l = path[i];
-        const float dx = s.x[l] - s.homeX[l];
-        const float dy = s.y[l] - s.homeY[l];
-        newTable[i] = std::sqrt (dx * dx + dy * dy) * (1.0f / 1.5f);   // scaling as in the reference model
+        case ScanMode::displacement:
+            for (std::size_t i = 0; i < n; ++i)
+            {
+                const auto l = path[i];
+                const float dx = s.x[l] - s.homeX[l], dy = s.y[l] - s.homeY[l];
+                newTable[i] = std::sqrt (dx * dx + dy * dy) * (1.0f / 1.5f);   // scaling as in the reference model
+            }
+            break;
+
+        case ScanMode::speed:
+            for (std::size_t i = 0; i < n; ++i)
+            {
+                const auto l = path[i];
+                newTable[i] = std::sqrt (s.vx[l] * s.vx[l] + s.vy[l] * s.vy[l]) * speedScale;
+            }
+            break;
+
+        case ScanMode::springForce:
+            for (std::size_t i = 0; i < n; ++i)
+            {
+                const auto a = path[i], b = path[i + 1 < n ? i + 1 : 0];
+                const float len = std::hypot (s.x[b] - s.x[a], s.y[b] - s.y[a]);
+                newTable[i] = std::abs (len - restLength[i]) * springForceScale;
+            }
+            break;
+
+        case ScanMode::yPosition:
+            for (std::size_t i = 0; i < n; ++i)
+            {
+                const auto l = path[i];
+                newTable[i] = (s.y[l] - s.homeY[l]) * yPositionScale;
+            }
+            break;
     }
 
     crossfade = 0.0f;
