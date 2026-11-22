@@ -5,7 +5,8 @@ juce_add_console_app(slink_bench PRODUCT_NAME "slink_bench")
 juce_generate_juce_header(slink_bench)
 
 target_sources(slink_bench PRIVATE
-    main.cpp)
+    main.cpp
+    SlinkCoreEngine.cpp)
 
 # Optional local-only reference model (not in the repository). If present it is
 # compiled in as the "refmodel" engine for comparison.
@@ -20,6 +21,7 @@ target_compile_definitions(slink_bench PRIVATE
     JUCE_USE_CURL=0)
 
 target_link_libraries(slink_bench PRIVATE
+    SlinkCore
     juce::juce_core
     juce::juce_graphics
     juce::juce_audio_basics

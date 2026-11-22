@@ -24,6 +24,9 @@ add_subdirectory("${JUCE_DIR}" "${CMAKE_BINARY_DIR}/JUCE")
 # ------------------------------------------------------------------------------
 # Targets
 # ------------------------------------------------------------------------------
-# core/    SlinkCore   — JUCE-free data-oriented physics library   (ToDo stage 1)
-# plugin/  Slink       — JUCE plugin wrapping SlinkCore             (ToDo stage 3)
+# core/    SlinkCore   — JUCE-free data-oriented physics library (+ tests)
+# bench/   slink_bench — engine cost vs the audio-callback budget
+# plugin/  Slink       — JUCE plugin wrapping SlinkCore             (ToDo stage 1b)
+enable_testing()
+add_subdirectory(core)
 add_subdirectory(bench)

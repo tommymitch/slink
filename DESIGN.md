@@ -8,10 +8,11 @@ This file records the design decisions; `ToDo.md` tracks the work.
 | Topic | Decision |
 |---|---|
 | Physics rate | A parameter, not a constant. Design for ≥ 1 kHz and **try audio rate** (one physics step per sample) without committing to it yet. |
-| Integrator | Selectable: **Legacy Heun** (the reference model's blend, to match its sound) and **symplectic Euler** (standard, more predictable). |
+| Integrator | Selectable. The reference model's "Heun" blend is algebraically symplectic Euler with a fixed step of 0.5 (`v' = (1+3f)/4·v + ½a`, `x' = x + ½v'`), so there is one integrator with two time modes: **legacy** (fixed step per physics step, so mesh speed scales with physics rate) and **time-scaled** (step, damping and filter amounts scaled with the rate, so the mesh moves at the same real-world speed at any rate). They are identical at 60 Hz. |
 | Precision | `float` throughout the physics core. |
 | Polyphony | Not yet. Keep `State` separate from `Topology` so voices can share one mesh later. |
 | Mesh shapes | Spider-cross 50×15 first (the reference model's default). Other and new shapes later. |
+| Rest shape | Meshes are settled to force balance at build time (`settleRestShape()`) and measured from that shape, so they sit perfectly still until excited. Smoothing acts on displacement from rest. `RestShape::built` reproduces the reference model, which starts out of balance. |
 | Future | A 3D sphere, scanned over its surface while it spins (see ToDo backlog). Keep the core's vector maths easy to extend from 2D to 3D. |
 
 ## Structure

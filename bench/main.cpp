@@ -32,6 +32,8 @@ namespace slink::bench
 #if SLINK_HAS_REFMODEL
 std::unique_ptr<Engine> createRefModelEngine();
 #endif
+std::unique_ptr<Engine> createSlinkCoreEngine();
+std::unique_ptr<Engine> createSlinkCoreTimeScaledEngine();
 
 std::vector<EngineInfo> allEngines()
 {
@@ -40,6 +42,9 @@ std::vector<EngineInfo> allEngines()
    #if SLINK_HAS_REFMODEL
     engines.push_back ({ "refmodel", "Reference model: original OO mesh (50x15 spider-cross), Heun integrator", createRefModelEngine });
    #endif
+
+    engines.push_back ({ "slink-core",    "SlinkCore SoA mesh (50x15 spider-cross), legacy integrator",      createSlinkCoreEngine });
+    engines.push_back ({ "slink-core-ts", "SlinkCore SoA mesh (50x15 spider-cross), time-scaled integrator", createSlinkCoreTimeScaledEngine });
 
     return engines;
 }
