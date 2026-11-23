@@ -110,6 +110,17 @@ void SlinkProcessor::handleMidi (const juce::MidiMessage& m) noexcept
     }
 }
 
+void SlinkProcessor::handleCommand (const Command& c) noexcept
+{
+    switch (c.type)
+    {
+        case Command::Type::grab:    voice.grab (c.lump, c.a); break;
+        case Command::Type::drag:    voice.dragTo (c.a, c.b); break;
+        case Command::Type::release: voice.release(); break;
+        case Command::Type::reset:   voice.reset(); break;
+    }
+}
+
 void SlinkProcessor::render (float* output, int numSamples) noexcept
 {
     if (numSamples > 0)
@@ -128,8 +139,7 @@ void SlinkProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiB
 
     applyParameters (false);
 
-    if (resetRequested.exchange (false))
-        voice.reset();
+    commands.popAll ([this] (const Command& c) { handleCommand (c); });
 
     // Sample-accurate MIDI: render up to each event, then apply it.
     float* out = buffer.getWritePointer (0);

@@ -26,6 +26,25 @@ SlinkEditor::SlinkEditor (SlinkProcessor& p)
     exaggerationLabel.setFont (juce::FontOptions (13.0f));
     addAndMakeVisible (exaggerationLabel);
 
+    // Touch: drag on the mesh to grab it (not a plugin parameter, like the exaggeration).
+    auto& proc = slinkProcessor;   // captured directly: the view may call onRelease while the editor is being destroyed
+    meshView.onGrab    = [&proc] (std::uint32_t lump, float radius) { proc.grab (lump, radius); };
+    meshView.onDrag    = [&proc] (float dx, float dy) { proc.drag (dx, dy); };
+    meshView.onRelease = [&proc] { proc.release(); };
+
+    grabSize.setSliderStyle (juce::Slider::LinearHorizontal);
+    grabSize.setTextBoxStyle (juce::Slider::TextBoxRight, false, 50, 20);
+    grabSize.setRange (0.005, 0.2, 0.001);
+    grabSize.setSkewFactorFromMidPoint (0.05);
+    grabSize.onValueChange = [this] { meshView.setGrabRadius ((float) grabSize.getValue()); };
+    grabSize.setValue (0.05);
+    grabSize.setTooltip ("Radius of the patch a drag grabs (the mesh is 1 across)");
+    addAndMakeVisible (grabSize);
+
+    grabSizeLabel.setText ("Grab size", juce::dontSendNotification);
+    grabSizeLabel.setFont (juce::FontOptions (13.0f));
+    addAndMakeVisible (grabSizeLabel);
+
     resetButton.onClick = [this] { slinkProcessor.requestReset(); };
     addAndMakeVisible (resetButton);
 
@@ -62,11 +81,15 @@ void SlinkEditor::resized()
 
     // Mesh view on the left (square as space allows), parameters on the right.
     auto left = r.removeFromLeft (std::max (r.getWidth() - 420, r.getWidth() / 2));
-    auto controls = left.removeFromBottom (28).reduced (8, 3);
-    resetButton.setBounds (controls.removeFromRight (100));
-    controls.removeFromRight (8);
-    exaggerationLabel.setBounds (controls.removeFromLeft (120));
-    exaggeration.setBounds (controls);
+    auto grabRow = left.removeFromBottom (28).reduced (8, 3);
+    auto viewRow = left.removeFromBottom (28).reduced (8, 3);
+    resetButton.setBounds (grabRow.removeFromRight (100));
+    grabRow.removeFromRight (8);
+    grabSizeLabel.setBounds (grabRow.removeFromLeft (120));
+    grabSize.setBounds (grabRow);
+    viewRow.removeFromRight (108);
+    exaggerationLabel.setBounds (viewRow.removeFromLeft (120));
+    exaggeration.setBounds (viewRow);
     meshView.setBounds (left);
     generic.setBounds (r);
 }

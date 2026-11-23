@@ -8,8 +8,8 @@
 namespace slink::plugin
 {
 
-/** Bare-bones listening editor: the mesh view (with a display-only exaggeration
-    control), JUCE's generic parameter editor, a status line (physics rate in use,
+/** Bare-bones listening editor: the mesh view (drag it to grab the mesh; with
+    display-only exaggeration and grab-size controls), JUCE's generic parameter editor, a status line (physics rate in use,
     and whether the stability guard is limiting the spring) and an on-screen keyboard. */
 class SlinkEditor final : public juce::AudioProcessorEditor,
                           private juce::Timer
@@ -28,10 +28,13 @@ private:
     MeshView meshView;
     juce::Slider exaggeration;
     juce::Label exaggerationLabel;
+    juce::Slider grabSize;
+    juce::Label grabSizeLabel;
     juce::TextButton resetButton { "Reset mesh" };
     juce::GenericAudioProcessorEditor generic;
     juce::Label status;
     juce::MidiKeyboardComponent keyboard;
+    juce::TooltipWindow tooltips { this };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SlinkEditor)
 };

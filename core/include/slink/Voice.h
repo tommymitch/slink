@@ -50,6 +50,23 @@ public:
 
     void setScanMode (ScanMode m) noexcept { scan.setMode (m); }
 
+    /** Touch: grabs the free lumps within `radius` of `lump`'s current position
+        (the centre lump itself may be pinned; only free lumps are taken). They
+        are held kinematically, with a raised-cosine falloff from the centre, and
+        follow dragTo(). Replaces any earlier grab. */
+    void grab (std::uint32_t lump, float radius) noexcept;
+
+    /** Moves the grabbed patch by (dx, dy) mesh units from where it was grabbed.
+        The motion is smoothed over a few milliseconds, so block-rate updates
+        don't click. Positions are kept inside the unit square. */
+    void dragTo (float dx, float dy) noexcept;
+
+    /** Lets go. The patch keeps the velocity it was being moved with, so
+        releasing a stretched mesh plucks it and a fast drag flings it. */
+    void release() noexcept;
+
+    bool isGrabbing() const noexcept { return numGrabbed > 0; }
+
     /** Renders mono audio. */
     void render (float* output, int numSamples) noexcept;
 
@@ -88,6 +105,16 @@ private:
 
     bool freeEdges = false;
     void applyFreeEdges() noexcept;
+
+    // Touch grab: sized for every lump at construction, so grabbing never allocates.
+    std::vector<std::uint32_t> grabLump;
+    std::vector<float> grabWeight, grabStartX, grabStartY;
+    std::uint32_t numGrabbed = 0;
+    float grabTargetX = 0, grabTargetY = 0;     // requested offset
+    float grabOffsetX = 0, grabOffsetY = 0;     // smoothed offset, applied per step
+    float grabPrevX = 0, grabPrevY = 0;         // offset at the previous step (release velocity)
+    float grabSmoothing = 1.0f;                 // per-step one-pole coefficient
+    void applyGrab() noexcept;
 
     Params params;
     StepParams stepParams {};

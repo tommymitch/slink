@@ -291,6 +291,77 @@ void freeEdgesRoundTrip()
     CHECK (s.moveMask[0] == 1.0f);
 }
 
+// Touch: a grabbed patch follows the drag, pulls its neighbours through the
+// springs, and plucks the mesh on release without disturbing homes or masks.
+void grabDragRelease (slink::Integrator integrator, double physicsRate)
+{
+    slink::Voice v (slink::makeSpiderCross());
+    v.prepare (48000.0, physicsRate);
+    auto p = v.getParams();
+    p.integrator = integrator;
+    v.setParams (p);
+
+    const auto& t = v.getTopology();
+    const auto& s = v.getState();
+    const std::uint32_t centre = 360;   // on the scan ring
+    const float x0 = s.x[centre], y0 = s.y[centre];
+
+    std::vector<float> out (480);
+    auto run = [&] (int blocks, float* peak = nullptr)
+    {
+        for (int b = 0; b < blocks; ++b)
+        {
+            v.render (out.data(), (int) out.size());
+            if (peak != nullptr)
+                for (auto x : out)
+                    *peak = std::max (*peak, std::abs (x));
+        }
+    };
+
+    v.grab (centre, 0.05f);
+    CHECK (v.isGrabbing());
+    v.dragTo (0.02f, 0.03f);
+    run (20);   // 0.2 s: the 5 ms drag smoothing has converged
+
+    CHECK (std::abs (s.x[centre] - (x0 + 0.02f)) < 1.0e-5f);
+    CHECK (std::abs (s.y[centre] - (y0 + 0.03f)) < 1.0e-5f);
+    CHECK (s.moveMask[centre] == 0.0f);
+    CHECK (std::hypot (s.x[362] - t.restX[362], s.y[362] - t.restY[362]) > 1.0e-4f);   // just outside the patch
+
+    v.release();
+    CHECK (! v.isGrabbing());
+    CHECK (s.moveMask[centre] == 1.0f && s.filterMask[centre] == 1.0f);
+    CHECK (s.homeX[centre] == t.restX[centre] && s.homeY[centre] == t.restY[centre]);
+
+    float peak = 0.0f;
+    run (50, &peak);
+    CHECK (allFinite (out) && allFinite (s.x) && allFinite (s.y));
+    CHECK (peak > 1.0e-3f);   // released stretch = pluck
+
+    // A pinned lump can't be grabbed (its neighbours within a tiny radius neither).
+    v.grab (0, 1.0e-4f);
+    CHECK (! v.isGrabbing());
+
+    // Fling: a fast drag released mid-flight stays finite and inside the walls.
+    v.grab (centre, 0.08f);
+    for (int b = 0; b < 10; ++b)
+    {
+        v.dragTo (0.04f * (float) b, -0.03f * (float) b);
+        run (1);
+    }
+    v.release();
+    run (100);
+    CHECK (allFinite (s.x) && allFinite (s.y));
+    for (std::uint32_t i = 0; i < t.numLumps; ++i)
+        CHECK (s.x[i] >= 0.0f && s.x[i] <= 1.0f && s.y[i] >= 0.0f && s.y[i] <= 1.0f);
+
+    // reset() drops a grab in progress.
+    v.grab (centre, 0.05f);
+    v.reset();
+    CHECK (! v.isGrabbing());
+    CHECK (s.moveMask[centre] == 1.0f);
+}
+
 void timeScaledMatchesLegacyAtReferenceRate()
 {
     auto run = [] (slink::Integrator integrator)
@@ -397,6 +468,9 @@ int main()
         { "homing comes to rest",                      homingComesToRest },
         { "excitations and scan modes",                excitationsAndScanModes },
         { "free edges round trip",                     freeEdgesRoundTrip },
+        { "grab, drag, release (time-scaled, 1 kHz)",  [] { grabDragRelease (slink::Integrator::timeScaled, 1000.0); } },
+        { "grab, drag, release (time-scaled, 48 kHz)", [] { grabDragRelease (slink::Integrator::timeScaled, 48000.0); } },
+        { "grab, drag, release (legacy, 60 Hz)",       [] { grabDragRelease (slink::Integrator::legacy, 60.0); } },
         { "time-scaled == legacy at reference rate",   timeScaledMatchesLegacyAtReferenceRate },
         { "deterministic",                             deterministic },
         { "coincident lumps stay finite",              coincidentLumpsStayFinite },

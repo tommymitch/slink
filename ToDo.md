@@ -45,13 +45,13 @@ So each later stage can be judged by ear as well as by benchmark numbers.
 - [x] Drift (springs off)
 - [x] Gravity (downwards, amount). The reference model's gravity button did nothing: the line that set the gravity vector was commented out.
 - [x] Free edges: unpins the rim and hub; re-pinning puts them back at rest (the jump back excites the mesh). Kept across reset.
-- [x] Reset mesh button (editor -> audio thread through an atomic flag)
+- [x] Reset mesh button (editor -> audio thread; now through the command queue)
 - [x] Excitation: noise (scan ring, as before), sine (whole-mesh spatial harmonic with x/y harmonic numbers; additive, where the reference model set positions absolutely) or strike (raised-cosine bump at a point). Level-matched to noise (sine x0.8, strike x2).
 - [x] Scan mode: displacement, speed, spring stretch, y position. Level-matched to displacement with noise hits (x0.25, x0.42, x0.47). Sine excitation read as spring stretch stays ~25 dB quieter: a smooth shape barely stretches the ring.
 - [x] Stability: 960-case sweep (both modes, 60 Hz/1 kHz/48 kHz, k 0.8 and max, smoothing 0/0.01, gravity, homing, free/pinned, all excitations). All pinned cases decay under heavy damping. Free-edge cases are bounded (energy ratio <= 1.23, nothing diverges) but don't fully decay, see next item.
 - [ ] **Smoothing is still a position blend**, the same flaw homing had. When a mesh is held away from its rest shape (freed edges collapsing it into a knot, or gravity sag), smoothing fights the springs and leaves a small constant velocity: ~3e-5 with gravity (about -100 dB in speed mode, inaudible), larger in a collapsed free mesh. Fix: make smoothing a force (a Laplacian damper), which changes the parity sound, so decide by ear.
 - [ ] Free edges collapse the spider-cross: its spokes and diagonals are zero-rest-length springs, so without the rim pinned they pull everything to the centre. Consider rest-length spokes for free-edge meshes, or treat this as part of the new-shapes work.
-- [ ] Not exposed: speed (just 1/sqrt(mass)), syrup (a friction preset), asymmetry (needs per-lump/per-spring arrays and a worst-case guard), touch modes and custom scan paths (need the GUI -> audio command FIFO, stage 3/4).
+- [ ] Not exposed: speed (just 1/sqrt(mass)), syrup (a friction preset), asymmetry (needs per-lump/per-spring arrays and a worst-case guard), the remaining touch modes and custom scan paths (stage 4; the command queue they needed is in).
 
 ### Stage 2: optimise
 - [ ] Run the benchmark loop at real-time / audio-thread priority (macOS QoS), so OS scheduling outliers don't mask real worst-case changes (one 48 kHz run showed a single 155% block with a normal 49% p99)
@@ -62,18 +62,20 @@ So each later stage can be judged by ear as well as by benchmark numbers.
 - [ ] Benchmark and record each change
 
 ### Stage 3: Slink plugin (builds on the 1b target)
-- [ ] Physics rate derived from the host sample rate
-- [ ] Parameters through APVTS, applied in `processBlock` (work with the editor closed)
-- [ ] Parameters: physics rate, integrator, speed, spring, mass, friction, smoothing, homing ("still"), drift, gravity, velocity sensitivity
-- [ ] Correct MIDI handling: iterate all events, handle note-off
-- [ ] GUI → audio command FIFO (the audio → GUI position snapshot is done: `plugin/Source/MeshSnapshot.h`)
+- [x] Physics rate derived from the host sample rate (fixed rates, or "audio rate" = the host's rate)
+- [x] Parameters through APVTS, applied in `processBlock` (work with the editor closed)
+- [x] Parameters: physics rate, integrator, spring, mass, friction, smoothing, homing ("still"), drift, gravity, velocity sensitivity (speed left out, see stage 1c)
+- [x] Correct MIDI handling: iterate all events sample-accurately, note-off with last-note priority, all-sound-off resets
+- [x] GUI → audio command FIFO: `plugin/Source/CommandQueue.h` (grab, drag, release, reset; lock-free, fixed size, drags dropped when it's half full so grab/release always fit). The audio → GUI position snapshot is `plugin/Source/MeshSnapshot.h`
 - [ ] Benchmark the real `processBlock` (via the plugin's processor in `slink_bench`)
 - [ ] Validate with pluginval (not installed yet)
 
 ### Stage 4: editor and interaction
-- [ ] Mesh view drawn from the snapshot (basic version done in 1b; still needed: touch interaction, and the GPU renderer in the backlog)
-- [ ] Touch modes: grab/drag, force field, spatial harmonic, stick/unstick, reset
-- [ ] Toggles: free edges, gravity, drift, animate
+- [x] Mesh view drawn from the snapshot (plain JUCE graphics; the GPU renderer is in the backlog)
+- [x] Touch: grab and drag. Click near the mesh to grab a patch (radius = "Grab size", raised-cosine falloff) and drag it; releasing plucks the mesh, a fast drag flings it. Grabbed lumps are held kinematically (masks only: constraints and homes are untouched), the drag is smoothed over 5 ms so block-rate updates don't click, and release hands over the drag velocity. Drags are divided by the view exaggeration, so the grabbed lump stays under the mouse. Tested in both time modes at 60 Hz, 1 kHz and 48 kHz; no cost when not grabbing.
+- [ ] Touch modes, as a selector: force field (push/pull without pinning), stick/unstick (pin lumps where they are), paint a spatial harmonic
+- [x] Toggles: free edges, gravity, drift (as parameters)
+- [ ] Animate toggle (pause the display), if still wanted
 
 ## Backlog (later, not scheduled)
 - [ ] **Scan offset as a timbre control?** With the old built-shape home, a static offset made the scan read mostly radial motion (smoother sound). Re-introducing an adjustable offset could give a continuous control between that and the settled shape's rectified sound.
@@ -115,3 +117,4 @@ The **max** column matters most, because one late block is an audible dropout. I
 | 1 | slink-core | 48 kHz (audio rate) | 64 | **42.4%** | 47.6% | 53.6% | **Real-time.** ~8.8 µs per step (4.2× faster). Just over the 50% max goal; stage 2. Time-scaled mode costs the same |
 | 1b | slink-core | 48 kHz (audio rate) | 64 | 42.3% | 48.5% | 60.0% | Guard + optional compression cap: no change in cost (max is OS jitter; time-scaled 53.6%) |
 | 1c | slink-core | 48 kHz (audio rate) | 64 | 42.4% | 48.6% | 70.1% | Homing force in the integrate loop: +2% until specialised (loop compiled with/without homing); now back to stage 1 cost. Max is a single OS outlier (time-scaled 57.4%) |
+| 4 | slink-core | 48 kHz (audio rate) | 64 | 41.3% | 47.6% | 121.7% | Touch grab (one branch per step when not grabbing): no change in cost. Max is OS jitter on a loaded machine (load average 5.6; time-scaled 108.9%) |

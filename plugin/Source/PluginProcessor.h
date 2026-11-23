@@ -3,6 +3,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_audio_basics/juce_audio_basics.h>
 
+#include "CommandQueue.h"
 #include "MeshSnapshot.h"
 #include "Parameters.h"
 #include "slink/MeshBuilders.h"
@@ -16,8 +17,9 @@ namespace slink::plugin
 /** Monophonic Slink synth: one SlinkCore Voice on the audio thread.
 
     Everything the audio thread touches (the Voice, the held-note stack) is
-    owned and used only by the audio thread; the GUI talks to it through
-    parameters and the keyboard state, both thread-safe. */
+    owned and used only by the audio thread. The GUI talks to it through
+    parameters, the keyboard state and the command queue (touch, reset), all
+    thread-safe; positions come back through the mesh snapshot. */
 class SlinkProcessor final : public juce::AudioProcessor
 {
 public:
@@ -60,12 +62,21 @@ public:
     const slink::Topology& getTopology() const noexcept { return voice.getTopology(); }
     MeshSnapshot& getSnapshot() noexcept { return snapshot; }
 
-    /** From the editor: puts the mesh back at rest on the next audio block. */
-    void requestReset() noexcept { resetRequested.store (true); }
+    /** From the editor (message thread): mesh commands, applied at the start of
+        the next audio block. */
+    void requestReset() noexcept { commands.push ({ Command::Type::reset }); }
+    void grab (std::uint32_t lump, float radius) noexcept { commands.push ({ Command::Type::grab, lump, radius }); }
+    void drag (float dx, float dy) noexcept
+    {
+        if (! commands.isBusy())   // only the latest drag matters: keep room for grab/release
+            commands.push ({ Command::Type::drag, 0, dx, dy });
+    }
+    void release() noexcept { commands.push ({ Command::Type::release }); }
 
 private:
     void applyParameters (bool force) noexcept;
     void handleMidi (const juce::MidiMessage& message) noexcept;
+    void handleCommand (const Command& command) noexcept;
     void render (float* output, int numSamples) noexcept;
 
     juce::AudioProcessorValueTreeState state;
@@ -86,7 +97,7 @@ private:
 
     std::atomic<float> effectiveSpring { 0.8f }, requestedSpring { 0.8f };
     std::atomic<double> currentPhysicsRate { 60.0 };
-    std::atomic<bool> resetRequested { false };
+    CommandQueue commands;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SlinkProcessor)
 };
